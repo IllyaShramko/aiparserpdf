@@ -5,12 +5,10 @@ import { StructuralSplit } from "./types";
  *  - оборачивают JSON в ```json ... ``` несмотря на явный запрет в промпте,
  *  - добавляют одну вводную фразу перед JSON ("Вот результат:"),
  *  - иногда обрывают JSON на maxTokens (незакрытые скобки),
- *  - КОПИРУЮТ "дословный" маркер вместе с реальным переносом строки (\n) из исходного
- *    PDF-текста прямо внутрь значения строки в JSON, не экранируя его как \\n —
- *    JSON.parse не прощает непойманные control-символы (0x00-0x1F) внутри строковых литералов
- *    и падает с "Bad control character in string literal", что легко перепутать с обрезкой по maxTokens.
- * Эта функция вытаскивает JSON максимально терпимо и явно сообщает, что пошло не так,
- * вместо того чтобы падать молча — для research важно видеть ПОЧЕМУ парсинг не удался.
+ *  - КОПИРУЮТ "дословный" маркер вместе с реальным переносом строки (\n) или LaTeX-бэкслешами (\alpha, \(, \_)
+ *    прямо внутрь значения строки в JSON, не экранируя их —
+ *    JSON.parse падает с "Bad control character" или "Bad escaped character in JSON".
+ * Эта функция вытаскивает JSON максимально терпимо и явно сообщает, что пошло не так.
  */
 export function extractStructuralSplit(raw: string): {
   parsed: StructuralSplit | null;
@@ -32,9 +30,8 @@ export function extractStructuralSplit(raw: string): {
   }
   candidate = candidate.slice(firstBrace, lastBrace + 1);
 
-  // Экранируем непойманные control-символы (перенос строки, таб и т.д.), которые модель
-  // могла вставить "как есть" внутрь значения строки, скопировав кусок исходного текста.
-  candidate = escapeRawControlCharsInStrings(candidate);
+  // Экранируем непойманные control-символы и невалидные LaTeX-эскейпы (\alpha, \(, \_ и т.д.)
+  candidate = sanitizeJsonStringLiterals(candidate);
 
   try {
     const parsed = JSON.parse(candidate) as StructuralSplit;
@@ -57,22 +54,60 @@ export function extractStructuralSplit(raw: string): {
 }
 
 /**
- * Проходит по JSON-строке посимвольно и, только находясь ВНУТРИ строкового литерала
- * (между непроэкранированными кавычками), заменяет сырые control-символы (код < 0x20)
- * на их корректные JSON-экранированные эквиваленты. Вне строк (структурные пробелы/переносы
- * между полями) ничего не трогает — там control-символы валидны и менять их не нужно.
+ * Проходит по JSON-строке посимвольно:
+ * 1. Внутри строковых литералов экранирует сырые control-символы (код < 0x20).
+ * 2. Исправляет невалидные экранирования (например \alpha, \(, \_, \*, \s -> \\alpha, \\(, \\_, \\*).
  */
-function escapeRawControlCharsInStrings(json: string): string {
+function sanitizeJsonStringLiterals(json: string): string {
   let result = "";
   let insideString = false;
-  let isEscaped = false;
 
   for (let i = 0; i < json.length; i++) {
     const ch = json[i];
     const code = json.charCodeAt(i);
 
-    if (insideString && !isEscaped && code < 0x20) {
-      // Сырой control-символ внутри строки — экранируем по JSON-правилам
+    if (!insideString) {
+      if (ch === '"') {
+        insideString = true;
+      }
+      result += ch;
+      continue;
+    }
+
+    // Мы находимся ВНУТРИ строкового литерала
+    if (ch === '"') {
+      insideString = false;
+      result += ch;
+      continue;
+    }
+
+    if (ch === "\\") {
+      const nextChar = i + 1 < json.length ? json[i + 1] : "";
+      // Проверяем, является ли следующий символ валидным JSON escape: ", \, /, b, f, n, r, t, u
+      const isValidEscape =
+        nextChar === '"' ||
+        nextChar === "\\" ||
+        nextChar === "/" ||
+        nextChar === "b" ||
+        nextChar === "f" ||
+        nextChar === "n" ||
+        nextChar === "r" ||
+        nextChar === "t" ||
+        (nextChar === "u" && /^[0-9a-fA-F]{4}$/.test(json.slice(i + 2, i + 6)));
+
+      if (isValidEscape) {
+        result += "\\";
+        result += nextChar;
+        i++; // Пропускаем уже обработанный следующий символ
+      } else {
+        // Невалидный backslash (например \(, \alpha, \_, \*, \s) -> экранируем сам backslash
+        result += "\\\\";
+      }
+      continue;
+    }
+
+    if (code < 0x20) {
+      // Сырой control-символ внутри строки — экранируем
       switch (ch) {
         case "\n":
           result += "\\n";
@@ -90,14 +125,6 @@ function escapeRawControlCharsInStrings(json: string): string {
     }
 
     result += ch;
-
-    if (isEscaped) {
-      isEscaped = false;
-    } else if (ch === "\\" && insideString) {
-      isEscaped = true;
-    } else if (ch === '"') {
-      insideString = !insideString;
-    }
   }
 
   return result;

@@ -1,8 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
 import { extractTextFromPdf } from "./extractPdf";
+import { extractMarkdownWithVision } from "./extractPdfVision";
 import { runPipeline } from "./runner";
-import { STEP1_MODEL, STEP2_MODEL } from "./models.config";
+import {
+  STEP1_MODEL,
+  STEP2_MODEL,
+  PARSER_VISION_MODEL,
+  API_PROVIDER,
+  OPENROUTER_API_KEY,
+} from "./models.config";
 import { listAvailableModels } from "./lmStudioClient";
 import { RunMetrics } from "./types";
 
@@ -17,25 +24,19 @@ const INPUT_DIR = path.join(__dirname, "..", "input");
  * 2. Открой LM Studio -> Developer -> Start Server    — поднимет сервер на localhost:1234
  * 3. Положи PDF-файл в папку /input
  * 4. Запусти:
- *      npm run run -- имя-файла.pdf
- *
- * Пара моделей ЗАШИТА ЖЁСТКО в src/models.config.ts:
- *   - Step1 (структурный сплит на модули/уроки) — STEP1_MODEL (по умолчанию gemma-4-e4b)
- *   - Step2 (конспект/перефразировка урока)     — STEP2_MODEL (по умолчанию qwen3-1.7b)
- * Если нужна другая пара — поменяй STEP1_MODEL / STEP2_MODEL прямо в models.config.ts.
- *
- * При старте скрипт сам выведет список моделей, реально загруженных в LM Studio —
- * сверься с этим списком и поправь modelName в models.config.ts, если не совпадает.
- *
- * Результаты появятся в /output/<имя_документа>/<step1_id>__<step2_id>/, включая
- * папку lessons/ с деревом модуль -> уроки. Подробности — в README.md в корне проекта.
+ *      npm run run -- имя-файла.pdf            (быстрый pdf-parse)
+ *      npm run run -- имя-файла.pdf --vision   (структурный OCR через MinerU/VLM)
+ *      npm run run -- имя-файла.pdf --vision --force (принудительный перезапуск OCR без кэша)
  * ===========================================================================
  */
 async function main() {
-  const [, , fileArg] = process.argv;
+  const args = process.argv.slice(2);
+  const useVision = args.includes("--vision") || args.includes("--mineru");
+  const forceReExtract = args.includes("--force");
+  const fileArg = args.find((a) => !a.startsWith("--"));
 
   if (!fileArg) {
-    console.error("Укажи файл: npm run run -- <файл.pdf>");
+    console.error("Укажи файл: npm run run -- <файл.pdf> [--vision] [--force]");
     console.error(`Файлы должны лежать в ${INPUT_DIR}`);
     process.exit(1);
   }
@@ -46,47 +47,86 @@ async function main() {
     process.exit(1);
   }
 
-  // Сверка с реальным списком моделей в LM Studio — частая причина "тихих" ошибок,
-  // когда modelName в конфиге не совпадает с тем, что реально загружено
-  try {
-    const available = await listAvailableModels();
-    console.log("Модели, реально доступные в LM Studio прямо сейчас:");
-    available.forEach((m) => console.log(`  - ${m}`));
-    console.log("");
+  let visionModel = { ...PARSER_VISION_MODEL };
+  let step1Model = { ...STEP1_MODEL };
+  let step2Model = { ...STEP2_MODEL };
 
-    if (!available.includes(STEP1_MODEL.modelName)) {
-      console.warn(
-        `ВНИМАНИЕ: STEP1_MODEL.modelName ("${STEP1_MODEL.modelName}") не найден в списке выше. ` +
-          `Проверь models.config.ts, иначе запрос к LM Studio может упасть или уйти не в ту модель.`
+  if (API_PROVIDER === "openrouter") {
+    if (!OPENROUTER_API_KEY) {
+      console.error(
+        "ОШИБКА: Выбран провайдер OpenRouter, но переменная OPENROUTER_API_KEY не задана!\n" +
+          "Создай файл .env в корне проекта и добавь туда свой ключ:\n" +
+          "OPENROUTER_API_KEY=sk-or-v1-...\n"
       );
+      process.exit(1);
     }
-    if (!available.includes(STEP2_MODEL.modelName)) {
-      console.warn(
-        `ВНИМАНИЕ: STEP2_MODEL.modelName ("${STEP2_MODEL.modelName}") не найден в списке выше. ` +
-          `Проверь models.config.ts, иначе запрос к LM Studio может упасть или уйти не в ту модель.`
+    console.log(`=== Режим: OpenRouter Cloud ===`);
+    console.log(`  Vision OCR : ${visionModel.modelName}`);
+    console.log(`  Step 1     : ${step1Model.modelName}`);
+    console.log(`  Step 2     : ${step2Model.modelName}\n`);
+  } else {
+    // Сверка с реальным списком моделей в LM Studio
+    try {
+      const available = await listAvailableModels();
+      console.log("Модели, реально доступные в LM Studio прямо сейчас:");
+      available.forEach((m) => console.log(`  - ${m}`));
+      console.log("");
+
+      if (useVision && !available.includes(visionModel.modelName)) {
+        const match = available.find((m) => /vl|vision|qwen.*vl|minicpm/i.test(m));
+        if (match) {
+          console.log(`[Vision OCR] Автоматически подключена загруженная Vision-модель: "${match}"\n`);
+          visionModel.modelName = match;
+        } else {
+          console.warn(
+            `ВНИМАНИЕ: Vision-модель ("${visionModel.modelName}") не найдена в списке выше. ` +
+              `Убедись, что Qwen2.5-VL загружена в LM Studio.`
+          );
+        }
+      }
+
+      if (!available.includes(step1Model.modelName)) {
+        const match = available.find((m) => m.includes(step1Model.id) || m.endsWith(step1Model.id));
+        if (match) step1Model.modelName = match;
+      }
+
+      if (!available.includes(step2Model.modelName)) {
+        const match = available.find((m) => m.includes(step2Model.id) || m.endsWith(step2Model.id));
+        if (match) step2Model.modelName = match;
+      }
+      console.log("");
+    } catch (e) {
+      console.error(
+        `Не удалось достучаться до LM Studio (${(e as Error).message}). ` +
+          `Проверь, что сервер запущен: LM Studio -> Developer -> Start Server.`
       );
+      process.exit(1);
     }
-    console.log("");
-  } catch (e) {
-    console.error(
-      `Не удалось достучаться до LM Studio (${(e as Error).message}). ` +
-        `Проверь, что сервер запущен: LM Studio -> Developer -> Start Server.`
-    );
-    process.exit(1);
   }
 
-  console.log(`Извлекаю текст из ${fileArg}...`);
-  const sourceText = await extractTextFromPdf(filePath);
+  let sourceText = "";
+  if (useVision) {
+    console.log(`[Парсер] Используется Vision OCR (${visionModel.modelName})...`);
+    const visionRes = await extractMarkdownWithVision(filePath, fileArg, {
+      forceReExtract,
+      modelConfig: visionModel,
+    });
+    sourceText = visionRes.markdown;
+  } else {
+    console.log(`[Парсер] Извлекаю текст из ${fileArg} (pdf-parse)...`);
+    sourceText = await extractTextFromPdf(filePath);
+  }
+
   console.log(
-    `Текст извлечён: ${sourceText.length} символов, ~${
+    `Текст подготовлен: ${sourceText.length} символов, ~${
       sourceText.trim().split(/\s+/).length
     } слов\n`
   );
 
   console.log(
-    `=== Прогон: Step1=${STEP1_MODEL.id} (структурный сплит) | Step2=${STEP2_MODEL.id} (конспект) ===`
+    `=== Прогон: Step1=${step1Model.id} (структурный сплит) | Step2=${step2Model.id} (конспект) ===`
   );
-  const metrics = await runPipeline(STEP1_MODEL, STEP2_MODEL, fileArg, sourceText);
+  const metrics = await runPipeline(step1Model, step2Model, fileArg, sourceText);
 
   console.log(
     `  Step1: ${metrics.step1ParsedOk ? "OK" : "ОШИБКА"} | ` +

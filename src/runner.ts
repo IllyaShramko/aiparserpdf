@@ -109,7 +109,7 @@ export async function runPipeline(
         wordCountSource: countWords(lesson.rawText),
         wordCountResult,
         conspect: result.content,
-        withinWordRange: wordCountResult >= 450 && wordCountResult <= 850, // небольшой допуск к 500-800
+        withinWordRange: wordCountResult >= 100 && wordCountResult <= 700, // целевой диапазон 100-700 слов
       });
     } catch (e) {
       errors.push(

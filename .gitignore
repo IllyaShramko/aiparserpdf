@@ -3,5 +3,9 @@ dist/
 output/*
 !output/.gitkeep
 input/*
+testing/*
 !input/.gitkeep
+!testing/.gitkeep
+*.pdf
 *.log
+.env

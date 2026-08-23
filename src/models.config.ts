@@ -1,52 +1,64 @@
+import * as dotenv from "dotenv";
+dotenv.config();
 import { ModelConfig } from "./types";
 
-// LM Studio по умолчанию поднимает OpenAI-совместимый сервер на localhost:1234
-// Проверь порт в LM Studio -> Developer -> Server Settings, если у тебя другой
-export const LM_STUDIO_BASE_URL = "http://localhost:1234/v1";
+export const API_PROVIDER = (
+  process.env.API_PROVIDER || (process.env.OPENROUTER_API_KEY ? "openrouter" : "lmstudio")
+).toLowerCase();
 
-// Важно: modelName должен ТОЧНО совпадать со строкой модели, которую LM Studio
-// показывает в консоли сервера при загрузке (не обязательно совпадает с названием на скрине).
-// Проще всего: запусти модель в LM Studio, глянь консоль сервера -> там будет "model": "..."
-// либо просто дергани GET {LM_STUDIO_BASE_URL}/models и возьми id оттуда.
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 
-// --- Пара моделей для пайплайна, зашита жёстко (по договорённости) ---
-// Step1 (структурный сплит на модули/уроки) — модель посильнее, ей нужно
-// понимать структуру всего документа и держать сложный формат ответа (JSON).
+export const API_BASE_URL =
+  API_PROVIDER === "openrouter"
+    ? "https://openrouter.ai/api/v1"
+    : (process.env.LM_STUDIO_BASE_URL || "http://localhost:1234/v1");
+
+// Экспорт для совместимости
+export const LM_STUDIO_BASE_URL = API_BASE_URL;
+
+// --- Vision модель (для OCR / распознавания PDF страниц) ---
+export const PARSER_VISION_MODEL: ModelConfig = {
+  id: API_PROVIDER === "openrouter" ? "nemotron-vl-free" : "qwen2.5-vl-7b",
+  modelName:
+    process.env.VISION_MODEL ||
+    (API_PROVIDER === "openrouter"
+      ? "nvidia/nemotron-nano-12b-v2-vl:free"
+      : "qwen2.5-vl-7b-instruct"),
+  temperature: 0.0,
+  maxTokens: 8192,
+};
+
+// --- Step 1 (структурный сплит на модули/уроки) ---
 export const STEP1_MODEL: ModelConfig = {
-  id: "gemma-4-e4b",
-  modelName: "google/gemma-4-e4b", // ПРОВЕРЬ реальный id через /v1/models
+  id: API_PROVIDER === "openrouter" ? "nemotron-120b-free" : "gemma-4-e4b",
+  modelName:
+    process.env.STEP1_MODEL ||
+    (API_PROVIDER === "openrouter"
+      ? "nvidia/nemotron-3-super-120b-a12b:free"
+      : "google/gemma-4-e4b"),
   temperature: 0.2,
   maxTokens: 4096,
 };
 
-// Step2 (лёгкая перефразировка/конспект уже нарезанного урока) — модель попроще,
-// задача локальная и не требует держать в голове весь документ целиком.
+// --- Step 2 (конспектирование уроков) ---
 export const STEP2_MODEL: ModelConfig = {
-  id: "qwen3-1.7b",
-  modelName: "qwen/qwen3-1.7b", // ПРОВЕРЬ реальный id через /v1/models
+  id: API_PROVIDER === "openrouter" ? "nemotron-120b-free" : "qwen3-1.7b",
+  modelName:
+    process.env.STEP2_MODEL ||
+    (API_PROVIDER === "openrouter"
+      ? "nvidia/nemotron-3-super-120b-a12b:free"
+      : "qwen/qwen3-1.7b"),
   temperature: 0.2,
   maxTokens: 4096,
 };
 
-// --- Другие модели, доступные в LM Studio (на будущее, если решишь сравнить другую пару) ---
-// Сейчас НЕ используются в пайплайне — оставлены для справки/ручных экспериментов.
-export const OTHER_AVAILABLE_MODELS: ModelConfig[] = [
-  {
-    id: "gemma-2-9b",
-    modelName: "google/gemma-2-9b",
-    temperature: 0.2,
-    maxTokens: 4096,
-  },
-  {
-    id: "qwen2.5-7b-instruct",
-    modelName: "lmstudio-community/qwen2.5-7b-instruct",
-    temperature: 0.2,
-    maxTokens: 4096,
-  },
-  {
-    id: "llama-3.1-8b-instruct",
-    modelName: "bartowski/meta-llama-3.1-8b-instruct",
-    temperature: 0.2,
-    maxTokens: 4096,
-  },
+// Популярные бесплатные модели на OpenRouter (для справки):
+export const OPENROUTER_FREE_MODELS = [
+  "google/gemini-2.0-flash-exp:free",
+  "google/gemini-2.0-pro-exp-02-05:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "meta-llama/llama-3.2-11b-vision-instruct:free",
+  "qwen/qwen-2.5-vl-72b-instruct:free",
+  "qwen/qwen-2.5-72b-instruct:free",
+  "deepseek/deepseek-r1:free",
 ];
