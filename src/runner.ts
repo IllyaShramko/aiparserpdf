@@ -94,7 +94,12 @@ export async function runPipeline(
   const step2Start = Date.now();
 
   const lessonsToConspect = resolved.filter(
-    (r) => r.resolvedOk && r.lessonTitle !== "SKIP_PRACTICAL"
+    (r) =>
+      r.resolvedOk &&
+      r.lessonTitle !== "SKIP_PRACTICAL" &&
+      r.moduleTitle !== "SKIP_PRACTICAL" &&
+      !/skip_practical/i.test(r.lessonTitle) &&
+      !/skip_practical/i.test(r.moduleTitle)
   );
 
   for (const lesson of lessonsToConspect) {

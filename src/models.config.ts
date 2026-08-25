@@ -18,12 +18,12 @@ export const LM_STUDIO_BASE_URL = API_BASE_URL;
 
 // --- Vision модель (для OCR / распознавания PDF страниц) ---
 export const PARSER_VISION_MODEL: ModelConfig = {
-  id: API_PROVIDER === "openrouter" ? "nemotron-vl-free" : "qwen2.5-vl-7b",
+  id: API_PROVIDER === "openrouter" ? "nemotron-vl-free" : "qwen2.5-vl-3b",
   modelName:
     process.env.VISION_MODEL ||
     (API_PROVIDER === "openrouter"
       ? "nvidia/nemotron-nano-12b-v2-vl:free"
-      : "qwen2.5-vl-7b-instruct"),
+      : "qwen2.5-vl-3b-instruct"),
   temperature: 0.0,
   maxTokens: 8192,
 };
@@ -36,7 +36,7 @@ export const STEP1_MODEL: ModelConfig = {
     (API_PROVIDER === "openrouter"
       ? "nvidia/nemotron-3-super-120b-a12b:free"
       : "google/gemma-4-e4b"),
-  temperature: 0.2,
+  temperature: 0.1,
   maxTokens: 4096,
 };
 
